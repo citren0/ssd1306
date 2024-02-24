@@ -10,7 +10,7 @@ Change the I2C SCL and SDA lines in the header file
 Clone this repository into a ./components folder in the root directory of your idf project.
 
 Include the header like
-'''
+```
   #include "ssd1306.h"
-'''
+```
 
