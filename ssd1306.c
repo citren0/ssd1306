@@ -3,35 +3,54 @@
 #include "esp_log.h"
 #include "ssd1306.h"
 
+#include "font8x8.h"
+
 
 static const char * TAG = "SSD1306";
 
 
+uint8_t flipByte(uint8_t byte)
+{
+    uint8_t flippedByte = 0x00;
+    flippedByte =   ((byte & 0x1) << 7) | 
+                    ((byte & 0x2) << 5) | 
+                    ((byte & 0x4) << 3) | 
+                    ((byte & 0x8) << 1) | 
+                    ((byte & 0x10) >> 1) | 
+                    ((byte & 0x20) >> 3) | 
+                    ((byte & 0x40) >> 5) | 
+                    ((byte & 0x80) >> 7);
+    return flippedByte;
+}
+
 
 void initI2C(struct ssd1306 * device)
 {
+    esp_err_t err;
+    i2c_cmd_handle_t cmd;
 
     i2c_config_t i2c_config = {
         .mode = I2C_MODE_MASTER,
-        .scl_io_num = 12,
-        .sda_io_num = 11,
+        .scl_io_num = SSD1306SCL,
+        .sda_io_num = SSD1306SDA,
         .sda_pullup_en = GPIO_PULLUP_ENABLE,
         .scl_pullup_en = GPIO_PULLUP_ENABLE,
-        .master.clk_speed = 400000,
+        .master.clk_speed = SSD1306CLKSPEED,
     };
 
-    ESP_ERROR_CHECK(i2c_param_config(I2C_NUM_0, &i2c_config));
 
+    ESP_ERROR_CHECK(i2c_param_config(I2C_NUM_0, &i2c_config));
     ESP_ERROR_CHECK(i2c_driver_install(I2C_NUM_0, I2C_MODE_MASTER, 0, 0, 0));
 
 
-    esp_err_t err;
-    i2c_cmd_handle_t cmd = i2c_cmd_link_create();
-
+    cmd = i2c_cmd_link_create();
     i2c_master_start(cmd);
+
 
     // Device address and write flag.
     i2c_master_write_byte(cmd, (SSD1306ADDRESS << 1) | I2C_MASTER_WRITE, true);
+
+
     // Control byte
     ESP_ERROR_CHECK(i2c_master_write_byte(cmd, 0x00, true));
     // Display off
@@ -85,7 +104,7 @@ void initI2C(struct ssd1306 * device)
     i2c_master_stop(cmd);
 
     // Send command.
-    err = i2c_master_cmd_begin(I2C_NUM_0, cmd, 10 / portTICK_PERIOD_MS);
+    err = i2c_master_cmd_begin(I2C_NUM_0, cmd, I2CCOMMANDWAITMS / portTICK_PERIOD_MS);
 
     if (err == ESP_OK)
     {
@@ -104,36 +123,40 @@ void writeDisplay(struct ssd1306 * device)
 {
     esp_err_t err;
     i2c_cmd_handle_t cmd;
+    uint8_t * currPage;
 
-    // Memory page.
+    // Memory must be written page-by-page.
     for (int i = 0; i < NUM_PAGES; i++)
     {
-        uint8_t * currpage = &device->framebuffer[i][0];
+        currPage = &device->framebuffer[i][0];
 
         // Control signal.
         cmd = i2c_cmd_link_create();
         i2c_master_start(cmd);
         i2c_master_write_byte(cmd, (SSD1306ADDRESS << 1) | I2C_MASTER_WRITE, true);
 
+        // Control byte sequence.
         ESP_ERROR_CHECK(i2c_master_write_byte(cmd, 0x00, true));
         ESP_ERROR_CHECK(i2c_master_write_byte(cmd, 0x00, true));
         ESP_ERROR_CHECK(i2c_master_write_byte(cmd, 0x10, true));
         ESP_ERROR_CHECK(i2c_master_write_byte(cmd, 0xB0 | i, true));
 
+        // Send command.
         i2c_master_stop(cmd);
-        err = i2c_master_cmd_begin(I2C_NUM_0, cmd, 10 / portTICK_PERIOD_MS);
+        err = i2c_master_cmd_begin(I2C_NUM_0, cmd, I2CCOMMANDWAITMS / portTICK_PERIOD_MS);
         i2c_cmd_link_delete(cmd);
 
-        // Write page.
+        // Write page data command.
         cmd = i2c_cmd_link_create();
         i2c_master_start(cmd);
         i2c_master_write_byte(cmd, (SSD1306ADDRESS << 1) | I2C_MASTER_WRITE, true);
 
         ESP_ERROR_CHECK(i2c_master_write_byte(cmd, 0x40, true));
-        ESP_ERROR_CHECK(i2c_master_write(cmd, currpage, BYTES_PER_PAGE, true));
+        ESP_ERROR_CHECK(i2c_master_write(cmd, currPage, BYTES_PER_PAGE, true));
 
+        // Send data.
         i2c_master_stop(cmd);
-        err = i2c_master_cmd_begin(I2C_NUM_0, cmd, 10 / portTICK_PERIOD_MS);
+        err = i2c_master_cmd_begin(I2C_NUM_0, cmd, I2CCOMMANDWAITMS / portTICK_PERIOD_MS);
         i2c_cmd_link_delete(cmd);
     }
 
@@ -142,7 +165,7 @@ void writeDisplay(struct ssd1306 * device)
 
 void clearDisplay(struct ssd1306 * device)
 {
-    memset(device->framebuffer, 0x00, NUM_PAGES * BYTES_PER_PAGE);
+    memset(device->framebuffer, 0x00, TOTALDISPLAYMEMORY);
 
     writeDisplay(device);
 }
@@ -150,24 +173,66 @@ void clearDisplay(struct ssd1306 * device)
 
 int writeBitmap(struct ssd1306 * device, uint8_t * bitmap, size_t bitmapSize)
 {
-    if (bitmapSize != NUM_PAGES * BYTES_PER_PAGE)
+    if (bitmapSize != TOTALDISPLAYMEMORY)
     {
         ESP_LOGE(TAG, "Bitmap is wrong size for display.");
         return -1;
     }
 
+    // The display expects bitmap data to come in a different format. This consists in something similar to a transpose operation.
+    // For example, a bitmap image looking like:
+
+    // Byte 0: 11111111
+    // Byte 1: 00000000
+    // Byte 2: 11111111
+    // Byte 3: 00000000
+    // Byte 4: 11111111
+    // Byte 5: 00000000
+    // Byte 6: 11111111
+    // Byte 7: 00000000
+    // ...
+
+    // Is transformed to look like:
+
+    // Byte 0: 10101010
+    // Byte 1: 10101010
+    // Byte 2: 10101010
+    // Byte 3: 10101010
+    // Byte 4: 10101010
+    // Byte 5: 10101010
+    // Byte 6: 10101010
+    // Byte 7: 10101010
+    // ...
+
+    // The display has a memory layout like this:
+
+    //                 SEG0  SEG1  ...  SEG127
+    // Page 0:  Bit 0   x     x            x
+    //          Bit 1   x     x            x
+    //          Bit 2   x     x            x
+    //          Bit 3   x     x            x
+    //          Bit 4   x     x            x
+    //          Bit 5   x     x            x
+    //          Bit 6   x     x            x
+    //          Bit 7   x     x            x
+
+    // Which is akin to how the bits are actually shown on the display.
+
     clearDisplay(device);
 
+    // Populate the bitmap bit-by-bit since we are mangling every byte into a new format.
     for (int page = 0; page < NUM_PAGES; page++)
     {
-        for (int i = 0; i < bitmapSize * BITS_PER_BYTE / NUM_PAGES; i++)
+        // Loop through every bit of this page.
+        for (int i = 0; i < (BYTES_PER_PAGE * BITS_PER_BYTE); i++)
         {
             int arr2width = BYTES_PER_PAGE;
             int arr2row = i / arr2width;
-            int arr2col = i % arr2width;
+            int arr2col = arr2width - (i % arr2width);
             int arr1idx = (i / BITS_PER_BYTE) + (page * BYTES_PER_PAGE);
             int arr1bit = 7 - (i % BITS_PER_BYTE);
 
+            // Perform bitmask of the current bit, populate the framebuffer with it in the correct offset.
             device->framebuffer[page][arr2col] |= (((bitmap[arr1idx] & (0x1 << arr1bit)) >> arr1bit) << (arr2row));
         }
     }
@@ -175,4 +240,65 @@ int writeBitmap(struct ssd1306 * device, uint8_t * bitmap, size_t bitmapSize)
     writeDisplay(device);
 
     return 0;
+}
+
+
+int displayText(struct ssd1306 * device, char * text, uint8_t fontSize)
+{
+    // Add more font sizes in the future.
+    if (fontSize != 8)
+    {
+        return -1;
+    }
+
+    clearDisplay(device);
+
+    int charsPerRow = WIDTH / fontSize;
+    int numRows = HEIGHT / (fontSize + 1);
+    int stringLength = strlen(text);
+    int maxStringLength = charsPerRow * numRows;
+
+    if (stringLength > maxStringLength)
+    {
+        stringLength = maxStringLength;
+    }
+
+    uint8_t bitmap[TOTALDISPLAYMEMORY];
+
+    memset(bitmap, 0x00, TOTALDISPLAYMEMORY);
+
+    // Populate bitmap with text row by row, character by character.
+    int characterTrimmed = 0;
+    for (int character = 0; character < stringLength; character++)
+    {
+        int textWrapRow = characterTrimmed / charsPerRow;
+        int charInRow = characterTrimmed % charsPerRow;
+
+        // If we are the first character in a row and a space, don't write the character.
+        if ((text[characterTrimmed] == ' ') && (charInRow % charsPerRow == 0))
+        {
+            // Don't update characterTrimmed.
+            continue;
+        }
+
+        // Each character has a number of rows equal to the fontSize.
+        for (int row = 0; row < fontSize; row++)
+        {
+            // Calculate the index of the bitmap based on what character we are within the row, what row we're on, and how many times we've wrapped the text.
+            int bitmapIdx = (character % charsPerRow) + (charsPerRow * textWrapRow * (fontSize + 1)) + (row * charsPerRow);
+
+            // Grab the current row of the current character.
+            uint8_t currCharRowByte = font8x8_basic[(uint8_t)(text[characterTrimmed])][row];
+            // Font is little endian, flip bits.
+            uint8_t flippedFontByte = flipByte(currCharRowByte);
+            bitmap[bitmapIdx] = flippedFontByte;
+        }
+
+        characterTrimmed++;
+    }
+
+    writeBitmap(device, bitmap, TOTALDISPLAYMEMORY);
+
+    return 0;
+
 }
