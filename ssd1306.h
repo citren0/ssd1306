@@ -1,13 +1,13 @@
 #define WIDTH 128
-#define HEIGHT 64
-#define NUM_PAGES 8
-#define BYTES_PER_PAGE WIDTH
+#define HEIGHT 32
+#define NUM_PAGES ((WIDTH * HEIGHT) / (BYTES_PER_PAGE * 8))
+#define BYTES_PER_PAGE 128
 #define SSD1306ADDRESS 0x3c
 #define BITS_PER_BYTE 8
-#define SSD1306SDA 11
-#define SSD1306SCL 12
+#define SSD1306SDA 26
+#define SSD1306SCL 27
 #define SSD1306CLKSPEED 400000
-#define I2CCOMMANDWAITMS 10
+#define I2CCOMMANDWAITMS 100
 #define TOTALDISPLAYMEMORY NUM_PAGES * BYTES_PER_PAGE
 
 
@@ -26,4 +26,4 @@ void clearDisplay(struct ssd1306 * device);
 
 int writeBitmap(struct ssd1306 * device, uint8_t * bitmap, size_t bitmapSize);
 
-int displayText(struct ssd1306 * device, char * text, uint8_t fontSize);
+int displayText(struct ssd1306 * device, char * text);
