@@ -1,3 +1,15 @@
+
+#ifndef SSD1306_H_
+#define SSD1306_H_
+
+#include "stdint.h"
+#include "driver/i2c.h"
+#include "string.h"
+#include "esp_log.h"
+#include "ssd1306.h"
+#include "font8x8.h"
+#include "stddef.h"
+
 #define WIDTH 128
 #define HEIGHT 32
 #define NUM_PAGES ((WIDTH * HEIGHT) / (BYTES_PER_PAGE * 8))
@@ -27,3 +39,5 @@ void clearDisplay(struct ssd1306 * device);
 int writeBitmap(struct ssd1306 * device, uint8_t * bitmap, size_t bitmapSize);
 
 int displayText(struct ssd1306 * device, char * text);
+
+#endif // SSD1306_H_

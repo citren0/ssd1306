@@ -1,10 +1,5 @@
-#include "driver/i2c.h"
-#include "string.h"
-#include "esp_log.h"
+
 #include "ssd1306.h"
-
-#include "font8x8.h"
-
 
 static const char * TAG = "SSD1306";
 
